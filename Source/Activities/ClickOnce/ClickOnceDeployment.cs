@@ -12,6 +12,7 @@ namespace TfsBuildExtensions.Activities.ClickOnce
     using Microsoft.Build.Tasks;
     using Microsoft.Build.Utilities;
     using Microsoft.TeamFoundation.Build.Client;
+    using Microsoft.TeamFoundation.Build.Workflow.Activities;
 
     /// <summary>
     /// ClickOnceDeployment
@@ -70,6 +71,21 @@ namespace TfsBuildExtensions.Activities.ClickOnce
         public InArgument<string> ManifestCertificateThumbprint { get; set; }
 
         /// <summary>
+        /// Publisher name 
+        /// </summary>
+        public InArgument<string> Publisher { get; set; }
+
+        /// <summary>
+        /// Application description to show up in the installer
+        /// </summary>
+        public InArgument<string> ApplicationDescription { get; set; }
+
+        /// <summary>
+        /// Application icon
+        /// </summary>
+        public InArgument<string> ApplicationIcon { get; set; }
+
+        /// <summary>
         /// Publish Location
         /// </summary>
         [RequiredArgument]
@@ -103,6 +119,9 @@ namespace TfsBuildExtensions.Activities.ClickOnce
             string installLocation = this.InstallLocation.Get(this.ActivityContext);
             string targetFrameworkVersion = this.TargetFrameworkVersion.Get(this.ActivityContext);
             string manifestCertificateThumbprint = this.ManifestCertificateThumbprint.Get(this.ActivityContext);
+            string publisher = this.Publisher.Get(this.ActivityContext);
+            string applicationDescription = this.ApplicationDescription.Get(this.ActivityContext) ?? applicationName;
+            string applicationIcon = this.ApplicationIcon.Get(this.ActivityContext);
 
             try
             {
@@ -119,12 +138,17 @@ namespace TfsBuildExtensions.Activities.ClickOnce
                 // Copy Files from bin folder to publish location
                 CopyDirectory(binLocation, toFile, true);
 
-                string manifestCertificateThumbprintArg = !string.IsNullOrEmpty(manifestCertificateThumbprint) ? "-CertHash " + manifestCertificateThumbprint : string.Empty;
+                string manifestCertificateThumbprintArg = !string.IsNullOrEmpty(manifestCertificateThumbprint) ? "-CertHash \"" + manifestCertificateThumbprint + "\"" : string.Empty;
                 string certFilePathArg = !string.IsNullOrEmpty(certFilePath) ? "-CertFile " + certFilePath : string.Empty;
                 string certPasswordArg = !string.IsNullOrEmpty(certPassword) ? "-Password " + certPassword : string.Empty;
 
                 // Create Application Manifest
-                string args = "-New Application -Processor " + this.Processor.Get(this.ActivityContext) + " -ToFile \"" + toFile + "\\" + applicationName + ".exe.manifest\" -name " + applicationName + " -Version " + version + " -FromDirectory \"" + toFile + "\"";
+                string args = "-New Application -Processor " + this.Processor.Get(this.ActivityContext) + " -ToFile \"" + toFile + "\\" + applicationName + ".exe.manifest\" -name \"" + applicationDescription + "\" -Version " + version + " -FromDirectory \"" + toFile + "\"";
+                if (!string.IsNullOrEmpty(applicationIcon))
+                {
+                    args += " -IconFile " + applicationIcon;
+                }
+
                 RunMage(mageFilePath, args);
 
                 // Sign Application Manifest
@@ -138,7 +162,7 @@ namespace TfsBuildExtensions.Activities.ClickOnce
                 args = "-Sign \"" + toFile + "\\" + applicationName + ".exe.manifest\" " + manifestCertificateThumbprintArg + " " + certFilePathArg + " " + certPasswordArg;
                 RunMage(mageFilePath, args);
 
-                CreateDeploymentManifest(version, applicationName, publishLocation, targetFrameworkVersion);
+                CreateDeploymentManifest(version, applicationName, publishLocation, targetFrameworkVersion, applicationDescription, publisher);
 
                 // Sign Deployment Manifest
                 args = "-Sign \"" + publishLocation + "\\" + applicationName + ".application\" " + manifestCertificateThumbprintArg + " " + certFilePathArg + " " + certPasswordArg;
@@ -188,8 +212,9 @@ namespace TfsBuildExtensions.Activities.ClickOnce
             }
         }
 
-        private static void RunMage(string mageFilePath, string args)
+        private void RunMage(string mageFilePath, string args)
         {
+            this.ActivityContext.TrackBuildMessage(string.Format("Running mage: {0} {1}", mageFilePath, args), BuildMessageImportance.High);
             using (Process process = new Process())
             {
                 process.StartInfo.FileName = mageFilePath;
@@ -213,7 +238,7 @@ namespace TfsBuildExtensions.Activities.ClickOnce
             }
         }
 
-        private static void CreateDeploymentManifest(string version, string applicationName, string publishLocation, string targetFrameworkVersion)
+        private static void CreateDeploymentManifest(string version, string applicationName, string publishLocation, string targetFrameworkVersion, string applicationDescription, string publisher)
         {
             Dictionary<string, string> metadata = new Dictionary<string, string>();
             metadata.Add("TargetPath", "Application Files\\" + applicationName + "_" + version + "\\" + applicationName + ".exe.manifest");
@@ -222,7 +247,7 @@ namespace TfsBuildExtensions.Activities.ClickOnce
             {
                 AssemblyName = applicationName + ".application",
                 AssemblyVersion = version,
-                Product = applicationName,
+                Product = applicationDescription,
 
                 // DeploymentUrl = installLocation,
                 Install = true,
@@ -234,7 +259,8 @@ namespace TfsBuildExtensions.Activities.ClickOnce
                 CreateDesktopShortcut = false,
                 TargetFrameworkVersion = targetFrameworkVersion,
                 TargetFrameworkMoniker = ".NETFramework,Version=v" + targetFrameworkVersion,
-                MinimumRequiredVersion = version
+                MinimumRequiredVersion = version,
+                Publisher = publisher
             };
 
             generateDeploymentManifest.Execute();
@@ -242,13 +268,15 @@ namespace TfsBuildExtensions.Activities.ClickOnce
 
         private static void CreateBootstrapper(string applicationFile, string applicationName, string installLocation, string publishDir)
         {
-            GenerateBootstrapper bootStrapper = new GenerateBootstrapper();
-            bootStrapper.ApplicationFile = applicationFile;
-            bootStrapper.ApplicationName = applicationName;
-            bootStrapper.ApplicationUrl = installLocation;
+            GenerateBootstrapper bootStrapper = new GenerateBootstrapper
+                                                {
+                                                    ApplicationFile = applicationFile,
+                                                    ApplicationName = applicationName,
+                                                    ApplicationUrl = installLocation,
+                                                    OutputPath = publishDir
+                                                };
 
             // bootStrapper.BootstrapperItems="@(BootstrapperFile)";
-            bootStrapper.OutputPath = publishDir;
             bootStrapper.Execute();
         }
 
